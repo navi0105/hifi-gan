@@ -2,17 +2,36 @@ import math
 import os
 import random
 import torch
+import torchaudio
 import torch.utils.data
 import numpy as np
+import librosa
 from librosa.util import normalize
 from scipy.io.wavfile import read
 from librosa.filters import mel as librosa_mel_fn
 
 MAX_WAV_VALUE = 32768.0
 
+def to_mono(audio, dim=-2): 
+    if len(audio.size()) > 1:
+        return torch.mean(audio, dim=dim, keepdim=True)
+    else:
+        return audio
 
-def load_wav(full_path):
-    sampling_rate, data = read(full_path)
+def load_audio(audio_path, sr=None, mono=True):
+    if 'mp3' in audio_path:
+        torchaudio.set_audio_backend('sox_io')
+    audio, org_sr = torchaudio.load(audio_path)
+    audio = to_mono(audio) if mono else audio
+    
+    if sr and org_sr != sr:
+        audio = torchaudio.transforms.Resample(org_sr, sr)(audio)
+
+    return audio
+
+def load_wav(full_path, sr=22050):
+    # sampling_rate, data = read(full_path)
+    data, sampling_rate = librosa.load(full_path, sr=sr, mono=True)
     return data, sampling_rate
 
 
@@ -46,29 +65,38 @@ mel_basis = {}
 hann_window = {}
 
 
+# def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False):
+#     if torch.min(y) < -1.:
+#         print('min value is ', torch.min(y))
+#     if torch.max(y) > 1.:
+#         print('max value is ', torch.max(y))
+
+#     global mel_basis, hann_window
+#     if fmax not in mel_basis:
+#         mel = librosa_mel_fn(sampling_rate, n_fft, num_mels, fmin, fmax)
+#         mel_basis[str(fmax)+'_'+str(y.device)] = torch.from_numpy(mel).float().to(y.device)
+#         hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
+
+#     y = torch.nn.functional.pad(y.unsqueeze(1), (int((n_fft-hop_size)/2), int((n_fft-hop_size)/2)), mode='reflect')
+#     y = y.squeeze(1)
+
+#     spec = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[str(y.device)],
+#                       center=center, pad_mode='reflect', normalized=False, onesided=True)
+
+#     spec = torch.sqrt(spec.pow(2).sum(-1)+(1e-9))
+
+#     spec = torch.matmul(mel_basis[str(fmax)+'_'+str(y.device)], spec)
+#     spec = spectral_normalize_torch(spec)
+
+#     return spec
+
 def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False):
-    if torch.min(y) < -1.:
-        print('min value is ', torch.min(y))
-    if torch.max(y) > 1.:
-        print('max value is ', torch.max(y))
+    device = y.device
+    melTorch = torchaudio.transforms.MelSpectrogram(sample_rate=sampling_rate, n_fft=n_fft, n_mels=num_mels, \
+           hop_length=hop_size, win_length=win_size, f_min=fmin, f_max=fmax, pad=int((n_fft-hop_size)/2), center=center).to(device)      
+    spec = melTorch(y)
 
-    global mel_basis, hann_window
-    if fmax not in mel_basis:
-        mel = librosa_mel_fn(sampling_rate, n_fft, num_mels, fmin, fmax)
-        mel_basis[str(fmax)+'_'+str(y.device)] = torch.from_numpy(mel).float().to(y.device)
-        hann_window[str(y.device)] = torch.hann_window(win_size).to(y.device)
-
-    y = torch.nn.functional.pad(y.unsqueeze(1), (int((n_fft-hop_size)/2), int((n_fft-hop_size)/2)), mode='reflect')
-    y = y.squeeze(1)
-
-    spec = torch.stft(y, n_fft, hop_length=hop_size, win_length=win_size, window=hann_window[str(y.device)],
-                      center=center, pad_mode='reflect', normalized=False, onesided=True)
-
-    spec = torch.sqrt(spec.pow(2).sum(-1)+(1e-9))
-
-    spec = torch.matmul(mel_basis[str(fmax)+'_'+str(y.device)], spec)
-    spec = spectral_normalize_torch(spec)
-
+    # spec = torchaudio.functional.amplitude_to_DB(spec, multiplier=10, amin=1e-10, db_multiplier=torch.log10(torch.max(spec)), top_db=80.0)
     return spec
 
 
@@ -110,22 +138,26 @@ class MelDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         filename = self.audio_files[index]
-        if self._cache_ref_count == 0:
-            audio, sampling_rate = load_wav(filename)
-            audio = audio / MAX_WAV_VALUE
-            if not self.fine_tuning:
-                audio = normalize(audio) * 0.95
-            self.cached_wav = audio
-            if sampling_rate != self.sampling_rate:
-                raise ValueError("{} SR doesn't match target {} SR".format(
-                    sampling_rate, self.sampling_rate))
-            self._cache_ref_count = self.n_cache_reuse
-        else:
-            audio = self.cached_wav
-            self._cache_ref_count -= 1
 
-        audio = torch.FloatTensor(audio)
-        audio = audio.unsqueeze(0)
+
+        # if self._cache_ref_count == 0:
+        #     audio, sampling_rate = load_wav(filename)
+        #     audio = audio / MAX_WAV_VALUE
+        #     if not self.fine_tuning:
+        #         audio = normalize(audio) * 0.95
+        #     self.cached_wav = audio
+        #     if sampling_rate != self.sampling_rate:
+        #         raise ValueError("{} SR doesn't match target {} SR".format(
+        #             sampling_rate, self.sampling_rate))
+        #     self._cache_ref_count = self.n_cache_reuse
+        # else:
+        #     audio = self.cached_wav
+        #     self._cache_ref_count -= 1
+
+        audio = load_audio(filename, self.sampling_rate)
+
+        # audio = torch.FloatTensor(audio)
+        # audio = audio.unsqueeze(0)
 
         if not self.fine_tuning:
             if self.split:

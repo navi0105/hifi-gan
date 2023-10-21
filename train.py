@@ -16,7 +16,9 @@ from env import AttrDict, build_env
 from meldataset import MelDataset, mel_spectrogram, get_dataset_filelist
 from models import Generator, MultiPeriodDiscriminator, MultiScaleDiscriminator, feature_loss, generator_loss,\
     discriminator_loss
-from utils import plot_spectrogram, scan_checkpoint, load_checkpoint, save_checkpoint
+from utils import plot_spectrogram, scan_checkpoint, load_checkpoint, save_checkpoint, save_audio
+
+from tqdm import tqdm
 
 torch.backends.cudnn.benchmark = True
 
@@ -98,6 +100,9 @@ def train(rank, a, h):
                                        drop_last=True)
 
         sw = SummaryWriter(os.path.join(a.checkpoint_path, 'logs'))
+
+        # os.makedirs(os.path.join(a.checkpoint_path, 'samples', 'gt'), exist_ok=True)
+        # os.makedirs(os.path.join(a.checkpoint_path, 'samples', 'generated'), exist_ok=True)
 
     generator.train()
     mpd.train()
@@ -184,12 +189,14 @@ def train(rank, a, h):
                     sw.add_scalar("training/mel_spec_error", mel_error, steps)
 
                 # Validation
-                if steps % a.validation_interval == 0:  # and steps != 0:
+                if steps % a.validation_interval == 0: # and steps != 0:
+                    print("Validation...")
+
                     generator.eval()
                     torch.cuda.empty_cache()
                     val_err_tot = 0
                     with torch.no_grad():
-                        for j, batch in enumerate(validation_loader):
+                        for j, batch in tqdm(enumerate(validation_loader), total=len(validation_loader)):
                             x, y, _, y_mel = batch
                             y_g_hat = generator(x.to(device))
                             y_mel = torch.autograd.Variable(y_mel.to(device, non_blocking=True))
@@ -201,9 +208,12 @@ def train(rank, a, h):
                             if j <= 4:
                                 if steps == 0:
                                     sw.add_audio('gt/y_{}'.format(j), y[0], steps, h.sampling_rate)
+                                    # save_audio(y[0], os.path.join(a.checkpoint_path, 'samples', 'gt', '{:04d}.wav'.format(j)), h.sampling_rate)
                                     sw.add_figure('gt/y_spec_{}'.format(j), plot_spectrogram(x[0]), steps)
 
                                 sw.add_audio('generated/y_hat_{}'.format(j), y_g_hat[0], steps, h.sampling_rate)
+                                # save_audio(y_g_hat[0, 0], os.path.join(a.checkpoint_path, 'samples', 'generated', '{:04d}.wav'.format(j)), h.sampling_rate)
+                                
                                 y_hat_spec = mel_spectrogram(y_g_hat.squeeze(1), h.n_fft, h.num_mels,
                                                              h.sampling_rate, h.hop_size, h.win_size,
                                                              h.fmin, h.fmax)
@@ -237,7 +247,7 @@ def main():
     parser.add_argument('--checkpoint_path', default='cp_hifigan')
     parser.add_argument('--config', default='')
     parser.add_argument('--training_epochs', default=3100, type=int)
-    parser.add_argument('--stdout_interval', default=5, type=int)
+    parser.add_argument('--stdout_interval', default=10, type=int)
     parser.add_argument('--checkpoint_interval', default=5000, type=int)
     parser.add_argument('--summary_interval', default=100, type=int)
     parser.add_argument('--validation_interval', default=1000, type=int)
