@@ -95,7 +95,7 @@ def mel_spectrogram(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin,
     melTorch = torchaudio.transforms.MelSpectrogram(sample_rate=sampling_rate, n_fft=n_fft, n_mels=num_mels, \
            hop_length=hop_size, win_length=win_size, f_min=fmin, f_max=fmax, pad=int((n_fft-hop_size)/2), center=center).to(device)      
     spec = melTorch(y)
-
+    spec = spectral_normalize_torch(spec)
     # spec = torchaudio.functional.amplitude_to_DB(spec, multiplier=10, amin=1e-10, db_multiplier=torch.log10(torch.max(spec)), top_db=80.0)
     return spec
 
